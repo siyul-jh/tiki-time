@@ -1,0 +1,41 @@
+name: TikiTime
+options:
+  bundleIdPrefix: com.tikitime
+  deploymentTarget:
+    macOS: "14.0"
+  xcodeVersion: "16.0"
+  createIntermediateGroups: true
+  groupSortPosition: top
+
+packages:
+  TikiTimeCore:
+    path: Packages/TikiTimeCore
+
+targets:
+  TikiTimeMac:
+    type: application
+    platform: macOS
+    deploymentTarget: "14.0"
+    sources:
+      - TikiTimeMac
+    dependencies:
+      - package: TikiTimeCore
+        product: TikiTimeCore
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.tikitime.mac
+        PRODUCT_NAME: TikiTime
+        SWIFT_VERSION: "5.9"
+        INFOPLIST_FILE: TikiTimeMac/Info.plist
+        CODE_SIGN_STYLE: Automatic
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+    info:
+      path: TikiTimeMac/Info.plist
+      properties:
+        LSUIElement: true
+        NSPrincipalClass: NSApplication
+        CFBundleDisplayName: TikiTime
+        NSHumanReadableCopyright: "© 2026 TikiTime"
+        LSApplicationCategoryType: app-category-utilities
+        NSUserNotificationAlertStyle: alert
+        UNUserNotificationCenterUsageDescription: "TikiTime이 매 정각마다 시간을 알려드립니다."
