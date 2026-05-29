@@ -9,11 +9,9 @@ DerivedData/
 *.xcuserstate
 **/*.xcuserdata/
 
-# XcodeGen
-# project.yml이 있으므로 xcodeproj 파일은 생성 가능하지만,
-# 필요할 수 있으니 개인 설정(xcuserdata)만 제외하고 유지합니다.
-
-# Packages
+# Swift Package Manager & XcodeGen
+.build/
+Packages/**/.build/
 .swiftpm/xcode/package.resolved
 .swiftpm/xcode/xcuserdata/
 
