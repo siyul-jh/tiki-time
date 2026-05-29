@@ -15,6 +15,10 @@ Packages/**/.build/
 .swiftpm/xcode/package.resolved
 .swiftpm/xcode/xcuserdata/
 
+# Tools / Cache
+.oma/
+.omc/
+
 # Crashlytics
 dSYMs/
 *.dSYM
