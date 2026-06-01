@@ -18,9 +18,14 @@ final class CharacterSpriteScene: SKScene {
         let behavior: WalkBehavior
         let manifest: CharacterManifest
         var emotionTextureCache: [String: SKTexture] = [:]
+        var emotionFrameCache: [String: [SKTexture]] = [:]
         var currentFloorY: CGFloat = 0
         var dockVelocityY: CGFloat = 0
         var isDockPhysics: Bool = false
+        var isDropping: Bool = false
+        var dropVelocity: CGFloat = 0
+        var lastIdleMessageTime: TimeInterval = -60
+        var nextWalkMessageTime: TimeInterval = 0
     }
     private var secondaryCharacters: [SecondaryCharacter] = []
 
@@ -30,6 +35,7 @@ final class CharacterSpriteScene: SKScene {
     private var dragStartLocation: CGPoint = .zero
     private var dragStartCharacterPos: CGPoint = .zero
     private let dragThreshold: CGFloat = 5
+    private var draggingSecondaryIndex: Int? = nil
 
     private var isDropping = false
     private var dropVelocity: CGFloat = 0
@@ -39,7 +45,7 @@ final class CharacterSpriteScene: SKScene {
     private var isDragOwner = false
     private var crossScreenTargetIndex: Int? = nil
     private var isReceivingCrossDrag = false
-    private var previousDragLocation: CGPoint = .zero
+    private var isReceivingSecondaryDragIndex: Int? = nil
 
     // MARK: - Scene config
     private var dockVelocityY: CGFloat = 0
@@ -79,6 +85,8 @@ final class CharacterSpriteScene: SKScene {
         NotificationCenter.default.addObserver(self, selector: #selector(handleCharacterTransfer(_:)), name: .tikiTimeCharacterTransfer, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(handleCrossDragUpdate(_:)), name: .tikiTimeDragUpdate, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(handleCrossDragEnd(_:)), name: .tikiTimeDragEnd, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(handleSecondaryDragUpdate(_:)), name: .tikiTimeSecondaryDragUpdate, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(handleSecondaryDragEnd(_:)), name: .tikiTimeSecondaryDragEnd, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(handleTestEmotion), name: .tikiTimeTestEmotion, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(handleTestDockStairs), name: .tikiTimeTestDockStairs, object: nil)
 
@@ -125,15 +133,21 @@ final class CharacterSpriteScene: SKScene {
             addChild(node)
 
             let behavior = makeWalkBehavior(startX: startX, speed: m.walkSpeed)
-            behavior.onStateChange = { [weak node] state in
-                guard let node else { return }
+            let capturedIndex = secondaryCharacters.count
+            behavior.onStateChange = { [weak self] state in
+                guard let self else { return }
                 switch state {
-                case .idle: node.stopWalk()
-                case .walking(let dir): node.playWalk(direction: dir)
+                case .idle:
+                    self.secondaryCharacters[capturedIndex].node.stopWalk()
+                    self.maybeShowSecondaryIdleMessage(index: capturedIndex)
+                case .walking(let dir):
+                    self.secondaryCharacters[capturedIndex].node.playWalk(direction: dir)
                 }
             }
 
-            secondaryCharacters.append(SecondaryCharacter(node: node, behavior: behavior, manifest: m, emotionTextureCache: secCache, currentFloorY: floorY))
+            var sec = SecondaryCharacter(node: node, behavior: behavior, manifest: m, emotionTextureCache: secCache, currentFloorY: floorY)
+            sec.nextWalkMessageTime = Double.random(in: 15...35)
+            secondaryCharacters.append(sec)
         }
     }
 
@@ -339,7 +353,8 @@ final class CharacterSpriteScene: SKScene {
         let delta = lastUpdateTime == 0 ? 0 : min(currentTime - lastUpdateTime, 1.0 / 30.0)
         lastUpdateTime = currentTime
 
-        if !characterNode.isHidden && !isDragging && !isReceivingCrossDrag {
+        let mainIsDragging = isDragging && draggingSecondaryIndex == nil
+        if !characterNode.isHidden && !mainIsDragging && !isReceivingCrossDrag {
             if isDropping {
                 updateDrop(delta: delta)
             } else {
@@ -355,32 +370,67 @@ final class CharacterSpriteScene: SKScene {
         }
 
         for index in secondaryCharacters.indices where !secondaryCharacters[index].node.isHidden {
-            secondaryCharacters[index].behavior.update(deltaTime: delta)
-            let posX = secondaryCharacters[index].behavior.positionX
-            secondaryCharacters[index].node.position.x = posX
-            let sTargetY = snappedFloorY(forX: posX)
-            var secFloorY = secondaryCharacters[index].currentFloorY
-            var secVelocityY = secondaryCharacters[index].dockVelocityY
-            var secIsPhysics = secondaryCharacters[index].isDockPhysics
-            applyDockJump(targetY: sTargetY, currentFloorY: &secFloorY, velocityY: &secVelocityY, isPhysics: &secIsPhysics, delta: delta, node: secondaryCharacters[index].node)
-            secondaryCharacters[index].currentFloorY = secFloorY
-            secondaryCharacters[index].dockVelocityY = secVelocityY
-            secondaryCharacters[index].isDockPhysics = secIsPhysics
-            secondaryCharacters[index].node.position.y = secondaryCharacters[index].currentFloorY
+            let secIsDragging = isDragging && draggingSecondaryIndex == index
+            let secIsReceiving = isReceivingSecondaryDragIndex == index
+            guard !secIsDragging && !secIsReceiving else { continue }
+            if secondaryCharacters[index].isDropping {
+                updateSecondaryDrop(index: index, delta: delta)
+            } else {
+                secondaryCharacters[index].behavior.update(deltaTime: delta)
+                let posX = secondaryCharacters[index].behavior.positionX
+                secondaryCharacters[index].node.position.x = posX
+                let sTargetY = snappedFloorY(forX: posX)
+                var secFloorY = secondaryCharacters[index].currentFloorY
+                var secVelocityY = secondaryCharacters[index].dockVelocityY
+                var secIsPhysics = secondaryCharacters[index].isDockPhysics
+                applyDockJump(targetY: sTargetY, currentFloorY: &secFloorY, velocityY: &secVelocityY, isPhysics: &secIsPhysics, delta: delta, node: secondaryCharacters[index].node)
+                secondaryCharacters[index].currentFloorY = secFloorY
+                secondaryCharacters[index].dockVelocityY = secVelocityY
+                secondaryCharacters[index].isDockPhysics = secIsPhysics
+                secondaryCharacters[index].node.position.y = secondaryCharacters[index].currentFloorY
+                if case .walking = secondaryCharacters[index].behavior.state {
+                    maybeShowSecondaryWalkMessage(index: index, at: currentTime)
+                }
+            }
         }
     }
 
     // MARK: - Mouse
 
+    private func characterHitTest(_ pos: CGPoint, at point: CGPoint) -> Bool {
+        return point.x >= pos.x - 55 && point.x <= pos.x + 55
+            && point.y >= pos.y - 10 && point.y <= pos.y + 200
+    }
+
     func isCharacterHit(at scenePoint: CGPoint) -> Bool {
-        let pos = characterNode.position
-        return scenePoint.x >= pos.x - 55 && scenePoint.x <= pos.x + 55
-            && scenePoint.y >= pos.y - 10 && scenePoint.y <= pos.y + 200
+        if !characterNode.isHidden, characterHitTest(characterNode.position, at: scenePoint) { return true }
+        for secondary in secondaryCharacters where !secondary.node.isHidden {
+            if characterHitTest(secondary.node.position, at: scenePoint) { return true }
+        }
+        return false
     }
 
     override func mouseDown(with event: NSEvent) {
         let loc = event.location(in: self)
-        guard isCharacterHit(at: loc) else { return }
+
+        // 보조 캐릭터 우선 검사
+        for (index, secondary) in secondaryCharacters.enumerated() {
+            guard !secondary.node.isHidden, characterHitTest(secondary.node.position, at: loc) else { continue }
+            draggingSecondaryIndex = index
+            isDragging = true
+            isDragOwner = true
+            hasDragged = false
+            dragStartLocation = loc
+            dragStartCharacterPos = secondary.node.position
+            secondaryCharacters[index].isDockPhysics = false
+            secondaryCharacters[index].dockVelocityY = 0
+            secondaryCharacters[index].isDropping = false
+            secondaryCharacters[index].dropVelocity = 0
+            return
+        }
+
+        guard !characterNode.isHidden, characterHitTest(characterNode.position, at: loc) else { return }
+        draggingSecondaryIndex = nil
         isDropping = false
         dropVelocity = 0
         isDockPhysics = false
@@ -391,7 +441,6 @@ final class CharacterSpriteScene: SKScene {
         hasDragged = false
         dragStartLocation = loc
         dragStartCharacterPos = characterNode.position
-        previousDragLocation = loc
     }
 
     override func mouseDragged(with event: NSEvent) {
@@ -399,16 +448,59 @@ final class CharacterSpriteScene: SKScene {
         let loc = event.location(in: self)
         let dx = loc.x - dragStartLocation.x
         let dy = loc.y - dragStartLocation.y
+
+        if let secIdx = draggingSecondaryIndex {
+            if !hasDragged, hypot(dx, dy) > dragThreshold {
+                hasDragged = true
+                secondaryCharacters[secIdx].behavior.pause()
+                secondaryCharacters[secIdx].node.stopWalk()
+            }
+            guard hasDragged else { return }
+            let rawX = dragStartCharacterPos.x + dx
+            let newY = max(0, min(size.height, dragStartCharacterPos.y + dy))
+            if rawX < 0, hasLeftNeighbor {
+                secondaryCharacters[secIdx].node.isHidden = true
+                crossScreenTargetIndex = screenIndex - 1
+                NotificationCenter.default.post(name: .tikiTimeSecondaryDragUpdate, object: nil, userInfo: [
+                    "activeScreenIndex": screenIndex - 1,
+                    "secondaryIndex": secIdx,
+                    "x": size.width + rawX,
+                    "y": newY
+                ])
+            } else if rawX > size.width, hasRightNeighbor {
+                secondaryCharacters[secIdx].node.isHidden = true
+                crossScreenTargetIndex = screenIndex + 1
+                NotificationCenter.default.post(name: .tikiTimeSecondaryDragUpdate, object: nil, userInfo: [
+                    "activeScreenIndex": screenIndex + 1,
+                    "secondaryIndex": secIdx,
+                    "x": rawX - size.width,
+                    "y": newY
+                ])
+            } else {
+                let newX = max(0, min(size.width, rawX))
+                secondaryCharacters[secIdx].node.isHidden = false
+                if crossScreenTargetIndex != nil {
+                    crossScreenTargetIndex = nil
+                    NotificationCenter.default.post(name: .tikiTimeSecondaryDragUpdate, object: nil, userInfo: [
+                        "activeScreenIndex": screenIndex,
+                        "secondaryIndex": secIdx,
+                        "x": newX,
+                        "y": newY
+                    ])
+                }
+                secondaryCharacters[secIdx].node.position = CGPoint(x: newX, y: newY)
+                secondaryCharacters[secIdx].behavior.positionX = newX
+                secondaryCharacters[secIdx].currentFloorY = newY
+            }
+            return
+        }
+
         if !hasDragged, hypot(dx, dy) > dragThreshold {
             hasDragged = true
             walkBehavior.pause()
             characterNode.stopWalk()
         }
         guard hasDragged else { return }
-        // 드래그 방향에 맞게 캐릭터 반전 유지
-        let instantDx = loc.x - previousDragLocation.x
-        if abs(instantDx) > 1 { characterNode.face(instantDx > 0 ? .right : .left) }
-        previousDragLocation = loc
         let rawX = dragStartCharacterPos.x + dx
         let newY = max(0, min(size.height, dragStartCharacterPos.y + dy))
 
@@ -449,6 +541,36 @@ final class CharacterSpriteScene: SKScene {
         guard isDragging else { return }
         isDragging = false
         isDragOwner = false
+
+        if let secIdx = draggingSecondaryIndex {
+            draggingSecondaryIndex = nil
+            if hasDragged {
+                if let targetIndex = crossScreenTargetIndex {
+                    crossScreenTargetIndex = nil
+                    NotificationCenter.default.post(name: .tikiTimeSecondaryDragEnd, object: nil, userInfo: [
+                        "targetIndex": targetIndex,
+                        "secondaryIndex": secIdx
+                    ])
+                } else {
+                    let finalX = secondaryCharacters[secIdx].node.position.x
+                    secondaryCharacters[secIdx].behavior.positionX = finalX
+                    let floorTarget = snappedFloorY(forX: finalX)
+                    if secondaryCharacters[secIdx].node.position.y > floorTarget + 2 {
+                        secondaryCharacters[secIdx].isDropping = true
+                        secondaryCharacters[secIdx].dropVelocity = 0
+                        secondaryCharacters[secIdx].currentFloorY = secondaryCharacters[secIdx].node.position.y
+                    } else {
+                        secondaryCharacters[secIdx].currentFloorY = floorTarget
+                        secondaryCharacters[secIdx].node.position = CGPoint(x: finalX, y: floorTarget)
+                        secondaryCharacters[secIdx].behavior.resume()
+                    }
+                }
+            } else {
+                triggerSecondaryInteraction(index: secIdx)
+            }
+            return
+        }
+
         if hasDragged {
             if let targetIndex = crossScreenTargetIndex {
                 crossScreenTargetIndex = nil
@@ -497,21 +619,158 @@ final class CharacterSpriteScene: SKScene {
         characterNode.position = CGPoint(x: walkBehavior.positionX, y: currentFloorY)
     }
 
-    private func weightedBounce() -> CGFloat {
-        let area = characterNode.physicsSize.width * characterNode.physicsSize.height
+    private func weightedBounce(node: CharacterNode? = nil) -> CGFloat {
+        let area = (node ?? characterNode).physicsSize.width * (node ?? characterNode).physicsSize.height
         let normalized = min(area / 32400, 1.0) // 180×180 = 1.0
         return dropBounce * (1 - normalized * 0.6)
     }
 
+    private func updateSecondaryDrop(index: Int, delta: TimeInterval) {
+        secondaryCharacters[index].dropVelocity += dropGravity * CGFloat(delta)
+        secondaryCharacters[index].currentFloorY += secondaryCharacters[index].dropVelocity * CGFloat(delta)
+        let posX = secondaryCharacters[index].behavior.positionX
+        let floorTarget = snappedFloorY(forX: posX)
+        if secondaryCharacters[index].currentFloorY <= floorTarget {
+            let impactSpeed = abs(secondaryCharacters[index].dropVelocity)
+            secondaryCharacters[index].currentFloorY = floorTarget
+            let bounce = impactSpeed * weightedBounce(node: secondaryCharacters[index].node)
+            secondaryCharacters[index].node.playLand(intensity: impactSpeed / 900)
+            if bounce > 25 {
+                secondaryCharacters[index].dropVelocity = bounce
+            } else {
+                secondaryCharacters[index].isDropping = false
+                secondaryCharacters[index].dropVelocity = 0
+                secondaryCharacters[index].behavior.resume()
+            }
+        }
+        secondaryCharacters[index].node.position = CGPoint(x: posX, y: secondaryCharacters[index].currentFloorY)
+    }
+
     private func handleGlobalClick() {
-        guard !characterNode.isHidden, let view else { return }
+        guard let view else { return }
         let screenPoint = NSEvent.mouseLocation
         guard let windowPoint = view.window?.convertPoint(fromScreen: screenPoint) else { return }
         let viewPoint = view.convert(windowPoint, from: nil)
         let scenePoint = convertPoint(fromView: viewPoint)
-        let hit = nodes(at: scenePoint).contains { $0.name == "character" || $0.name == "speechBubble" }
-        guard hit else { return }
-        triggerAIInteraction()
+
+        if !characterNode.isHidden {
+            let hit = nodes(at: scenePoint).contains { $0.name == "character" || $0.name == "speechBubble" }
+            if hit { triggerAIInteraction(); return }
+        }
+
+        for (index, secondary) in secondaryCharacters.enumerated() where !secondary.node.isHidden {
+            if characterHitTest(secondary.node.position, at: scenePoint) {
+                triggerSecondaryInteraction(index: index)
+                return
+            }
+        }
+    }
+
+    private func triggerSecondaryInteraction(index: Int) {
+        let secondary = secondaryCharacters[index]
+        let settings = UserSettings.load()
+        guard let apiKey = KeychainService.loadAPIKey(for: settings.aiProvider), !apiKey.isEmpty else {
+            if secondary.manifest.isImageBased {
+                applySecondaryEmotionWithRestore(index: index, emotion: emotionForCurrentContext())
+            } else {
+                secondaryCharacters[index].behavior.pause()
+                secondaryCharacters[index].node.stopWalk()
+                let resume = SKAction.run { [weak self] in self?.secondaryCharacters[index].behavior.resume() }
+                secondaryCharacters[index].node.run(.sequence([.wait(forDuration: 3.5), resume]), withKey: "messageResume")
+            }
+            let pool = (secondary.manifest.stateMessages["idle"] ?? []) + secondary.manifest.idleMessages
+            if let message = pool.randomElement() { secondary.node.playIdleMessage(message) }
+            return
+        }
+        let client = AIAPIClient(apiKey: apiKey, provider: settings.aiProvider)
+        let hour = Calendar.current.component(.hour, from: Date())
+        Task { @MainActor [weak self] in
+            guard let self, index < self.secondaryCharacters.count else { return }
+            guard let raw = try? await client.respond(to: "지금은 \(hour)시 클릭해서 반응해줘!") else { return }
+            let parsed = AIAPIClient.AIResponse.parse(raw)
+            if self.secondaryCharacters[index].manifest.isImageBased {
+                self.applySecondaryEmotionWithRestore(index: index, emotion: parsed.emotion)
+            } else {
+                self.secondaryCharacters[index].behavior.pause()
+                self.secondaryCharacters[index].node.stopWalk()
+                let resume = SKAction.run { [weak self] in self?.secondaryCharacters[index].behavior.resume() }
+                self.secondaryCharacters[index].node.run(.sequence([.wait(forDuration: 6.0), resume]), withKey: "messageResume")
+            }
+            self.secondaryCharacters[index].node.playAIResponse(parsed.text)
+        }
+    }
+
+    private func applySecondaryEmotionWithRestore(index: Int, emotion: String) {
+        guard index < secondaryCharacters.count else { return }
+        secondaryCharacters[index].behavior.pause()
+        secondaryCharacters[index].node.stopWalk()
+        let frames = loadSecondaryEmotionFrames(index: index, emotion: emotion)
+        if !frames.isEmpty {
+            secondaryCharacters[index].node.playEmotion(frames)
+        }
+        if let messages = secondaryCharacters[index].manifest.stateMessages[emotion],
+           let message = messages.randomElement() {
+            secondaryCharacters[index].node.playIdleMessage(message)
+        }
+        let restore = SKAction.run { [weak self] in
+            guard let self, index < self.secondaryCharacters.count else { return }
+            self.secondaryCharacters[index].node.stopEmotion()
+            if let texture = self.loadSecondaryTexture(index: index, emotion: "idle") {
+                self.secondaryCharacters[index].node.setEmotionTexture(texture)
+            }
+            self.secondaryCharacters[index].behavior.resume()
+        }
+        secondaryCharacters[index].node.run(.sequence([.wait(forDuration: 6.0), restore]), withKey: "restoreEmotion")
+    }
+
+    private func loadSecondaryEmotionFrames(index: Int, emotion: String) -> [SKTexture] {
+        if let cached = secondaryCharacters[index].emotionFrameCache[emotion] { return cached }
+        let manifest = secondaryCharacters[index].manifest
+        guard manifest.isImageBased, let paths = manifest.animations[emotion], !paths.isEmpty else { return [] }
+        let textures = paths.compactMap { path -> SKTexture? in
+            let url = CharacterStorageService.imageURL(characterId: manifest.id, relativePath: path)
+            guard let image = NSImage(contentsOf: url) else { return nil }
+            return SKTexture(image: image)
+        }
+        if !textures.isEmpty { secondaryCharacters[index].emotionFrameCache[emotion] = textures }
+        return textures
+    }
+
+    private func loadSecondaryTexture(index: Int, emotion: String) -> SKTexture? {
+        return loadTexture(emotion: emotion, manifest: secondaryCharacters[index].manifest, cache: &secondaryCharacters[index].emotionTextureCache)
+    }
+
+    private func maybeShowSecondaryIdleMessage(index: Int) {
+        guard index < secondaryCharacters.count, !secondaryCharacters[index].node.isHidden else { return }
+        let now = CACurrentMediaTime()
+        guard now - secondaryCharacters[index].lastIdleMessageTime > 30,
+              Double.random(in: 0...1) < 0.3 else { return }
+        secondaryCharacters[index].lastIdleMessageTime = now
+        let manifest = secondaryCharacters[index].manifest
+        if manifest.isImageBased, Double.random(in: 0...1) < 0.5 {
+            applySecondaryEmotionWithRestore(index: index, emotion: emotionForCurrentContext())
+        } else {
+            let pool = manifest.idleMessages.isEmpty
+                ? (manifest.stateMessages["idle"] ?? [])
+                : manifest.idleMessages
+            if let message = pool.randomElement() {
+                secondaryCharacters[index].node.playIdleMessage(message)
+            }
+        }
+    }
+
+    private func maybeShowSecondaryWalkMessage(index: Int, at currentTime: TimeInterval) {
+        guard secondaryCharacters[index].nextWalkMessageTime > 0,
+              currentTime >= secondaryCharacters[index].nextWalkMessageTime else { return }
+        secondaryCharacters[index].nextWalkMessageTime = currentTime + Double.random(in: 20...40)
+        guard !secondaryCharacters[index].node.isHidden else { return }
+        let manifest = secondaryCharacters[index].manifest
+        let pool = manifest.idleMessages.isEmpty
+            ? (manifest.stateMessages["idle"] ?? [])
+            : manifest.idleMessages
+        if let message = pool.randomElement() {
+            secondaryCharacters[index].node.playIdleMessage(message)
+        }
     }
 
     private func pauseWalkForMessage(duration: TimeInterval) {
@@ -601,6 +860,52 @@ final class CharacterSpriteScene: SKScene {
             currentFloorY = floorTarget
             characterNode.position = CGPoint(x: finalX, y: currentFloorY)
             walkBehavior.resume()
+        }
+    }
+
+    @objc private func handleSecondaryDragUpdate(_ notification: Notification) {
+        guard !isDragging else { return }
+        guard let userInfo = notification.userInfo,
+              let activeIndex = userInfo["activeScreenIndex"] as? Int,
+              let secIdx = userInfo["secondaryIndex"] as? Int,
+              secIdx < secondaryCharacters.count
+        else { return }
+
+        if activeIndex == screenIndex {
+            let x = userInfo["x"] as? CGFloat ?? secondaryCharacters[secIdx].node.position.x
+            let y = userInfo["y"] as? CGFloat ?? secondaryCharacters[secIdx].node.position.y
+            secondaryCharacters[secIdx].node.isHidden = false
+            isReceivingSecondaryDragIndex = secIdx
+            secondaryCharacters[secIdx].behavior.pause()
+            secondaryCharacters[secIdx].node.position = CGPoint(x: max(0, min(size.width, x)), y: max(0, min(size.height, y)))
+            secondaryCharacters[secIdx].behavior.positionX = secondaryCharacters[secIdx].node.position.x
+            secondaryCharacters[secIdx].currentFloorY = secondaryCharacters[secIdx].node.position.y
+        } else if isReceivingSecondaryDragIndex == secIdx {
+            isReceivingSecondaryDragIndex = nil
+            secondaryCharacters[secIdx].node.isHidden = true
+        }
+    }
+
+    @objc private func handleSecondaryDragEnd(_ notification: Notification) {
+        guard let userInfo = notification.userInfo,
+              let targetIndex = userInfo["targetIndex"] as? Int,
+              let secIdx = userInfo["secondaryIndex"] as? Int,
+              targetIndex == screenIndex,
+              secIdx < secondaryCharacters.count
+        else { return }
+
+        isReceivingSecondaryDragIndex = nil
+        let finalX = secondaryCharacters[secIdx].node.position.x
+        secondaryCharacters[secIdx].behavior.positionX = finalX
+        let floorTarget = snappedFloorY(forX: finalX)
+        if secondaryCharacters[secIdx].node.position.y > floorTarget + 2 {
+            secondaryCharacters[secIdx].isDropping = true
+            secondaryCharacters[secIdx].dropVelocity = 0
+            secondaryCharacters[secIdx].currentFloorY = secondaryCharacters[secIdx].node.position.y
+        } else {
+            secondaryCharacters[secIdx].currentFloorY = floorTarget
+            secondaryCharacters[secIdx].node.position = CGPoint(x: finalX, y: floorTarget)
+            secondaryCharacters[secIdx].behavior.resume()
         }
     }
 
