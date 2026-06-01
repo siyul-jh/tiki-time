@@ -82,7 +82,10 @@ struct SettingsView: View {
     private var notificationPane: some View {
         Form {
             Section("알림") {
-                Toggle("매 정각 알림 활성화", isOn: $settings.isHourlyNotificationEnabled)
+                LabeledContent("매 정각 알림 활성화") {
+                    Toggle("", isOn: $settings.isHourlyNotificationEnabled)
+                        .labelsHidden()
+                }
                 LabeledContent("알림 소리") {
                     Picker("", selection: $settings.notificationSound) {
                         ForEach(Self.soundOptions, id: \.value) { opt in
@@ -90,8 +93,8 @@ struct SettingsView: View {
                         }
                     }
                     .pickerStyle(.menu)
-                    .frame(width: 120)
                     .disabled(!settings.isHourlyNotificationEnabled)
+                    .padding(.trailing, -8)
                 }
             }
 
