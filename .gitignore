@@ -9,15 +9,26 @@ DerivedData/
 *.xcuserstate
 **/*.xcuserdata/
 
-# Swift Package Manager & XcodeGen
+# XcodeGen — 생성 파일 (project.yml에서 재생성 가능)
+TikiTime.xcodeproj/
+
+# Swift Package Manager
 .build/
 Packages/**/.build/
+Packages/checkouts/
 .swiftpm/xcode/package.resolved
 .swiftpm/xcode/xcuserdata/
+**/.swiftpm/
 
 # Tools / Cache
 .oma/
 .omc/
+
+# Editor / AI assistant local config
+.claude/
+.cursor/
+.vscode/
+.idea/
 
 # Crashlytics
 dSYMs/
