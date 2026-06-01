@@ -112,7 +112,7 @@ struct CharacterEditorView: View {
         let image = previews[currentState]?.first ?? previews["idle"]?.first
         let offsetY = CGFloat(manifest?.footOffsetY ?? 0)
         let offsetX = CGFloat(manifest?.footOffsetX ?? 0)
-        let size: CGFloat = 140
+        let size: CGFloat = 200
         let scale = size / 200.0
         let floorLineY = size / 2 - offsetY * scale
 
