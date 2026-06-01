@@ -152,8 +152,9 @@ final class CharacterNode: SKNode {
         let clamped = max(0.05, min(intensity, 0.6))
         let target: SKNode = imageNode ?? body
         target.removeAction(forKey: "land")
-        let squash = SKAction.scaleX(to: 1 + clamped * 0.9, y: 1 - clamped * 0.5, duration: 0.06)
-        let restore = SKAction.scaleX(to: 1.0, y: 1.0, duration: 0.14)
+        let sign: CGFloat = target.xScale < 0 ? -1.0 : 1.0
+        let squash = SKAction.scaleX(to: sign * (1 + clamped * 0.9), y: 1 - clamped * 0.5, duration: 0.06)
+        let restore = SKAction.scaleX(to: sign * 1.0, y: 1.0, duration: 0.14)
         squash.timingMode = .easeOut
         restore.timingMode = .easeIn
         target.run(.sequence([squash, restore]), withKey: "land")
